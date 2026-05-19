@@ -25,19 +25,25 @@ jobs:
       - name: Test import
         run: python -c "import main; print('MARS API imports OK')"
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
       - name: Deploy to Railway
-        run: railway up --detach
+        if: env.RAILWAY_TOKEN != ''
+        run: |
+          npm install -g @railway/cli
+          railway up --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Skip deploy (no token)
+        if: env.RAILWAY_TOKEN == ''
+        run: echo "RAILWAY_TOKEN not set - skipping deploy. Add secret to enable auto-deploy."
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
       - name: Notify deploy
+        if: always()
         run: |
+          echo "MARS API pipeline complete"
           curl -s -X POST https://api.resend.com/emails \
             -H "Authorization: Bearer ${{ secrets.RESEND_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d '{"from":"deploy@garcar.io","to":"carrolgarrett55@gmail.com","subject":"MARS API Deployed","html":"<h2>MARS API is LIVE</h2>"}' || true
-        env:
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+            -d '{"from":"deploy@garcar.io","to":"carrolgarrett55@gmail.com","subject":"MARS API Pipeline Complete","html":"<h2>MARS API Deploy Pipeline Finished</h2>"}' || true
