@@ -12,7 +12,7 @@ jobs:
     name: Sophia Layer | RHNS Cognitive & Security Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Verify System Integrity
         run: |
@@ -24,10 +24,10 @@ jobs:
     needs: rhns_metacognitive_check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Initialize Python Environment
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.3.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -55,7 +55,7 @@ jobs:
     needs: mars_wealth_execution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Log Event to Dispatch Bus
         run: |
