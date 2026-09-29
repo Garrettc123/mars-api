@@ -4,6 +4,9 @@ import stripe, os, httpx
 from datetime import datetime
 from typing import Optional, Any
 
+import mars_reason
+from extra_routes import mount_mars
+
 # ── Canonical Garcar Enterprise keys (from systems-master-hub vault + AutoKey) ─
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -22,15 +25,14 @@ APP_URL = os.getenv("APP_URL", "") or os.getenv("APP_BASE_URL", "")
 
 app = FastAPI(
     title="MARS API",
-    version="2.1.0",
-    description="Garcar Enterprise metacognitive revenue & reasoning surface — canonical key aligned"
+    version="2.1.1",
+    description="Garcar Enterprise metacognitive revenue & reasoning surface — MARS v1.1 routing wired"
 )
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 stripe.api_key = STRIPE_SECRET_KEY
 
-# Optional Supabase client (lazy)
 _supabase = None
 
 def get_supabase():
@@ -47,7 +49,6 @@ def get_supabase():
     return None
 
 def key_status() -> dict:
-    """Report which canonical keys are present (never the values)."""
     return {
         "STRIPE_SECRET_KEY": bool(STRIPE_SECRET_KEY),
         "STRIPE_WEBHOOK_SECRET": bool(STRIPE_WEBHOOK_SECRET),
@@ -62,19 +63,20 @@ def key_status() -> dict:
         "LINEAR_API_KEY": bool(LINEAR_API_KEY),
         "GITHUB_TOKEN": bool(GITHUB_TOKEN),
         "APP_URL": bool(APP_URL),
+        "MARS_REASON_URL": bool(os.getenv("MARS_REASON_URL") or os.getenv("MARS_PRODUCTION_URL")),
     }
 
-# ── ROOT ──────────────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
     return {
         "status": "MARS API LIVE",
-        "version": "2.1.0",
+        "version": "2.1.1",
         "org": "Garcar Enterprise OS",
         "endpoints": [
             "/health", "/revenue/dashboard", "/lead/capture",
             "/invoice/create", "/payment/link", "/deal/submit", "/deal/list",
-            "/agent/run", "/webhook/stripe", "/notify"
+            "/agent/run", "/api/reason", "/api/mars/status",
+            "/webhook/stripe", "/notify"
         ],
         "keys_configured": sum(1 for v in key_status().values() if v),
         "timestamp": datetime.utcnow().isoformat()
@@ -86,15 +88,15 @@ def health():
     return {
         "status": "ok",
         "service": "mars-api",
-        "version": "2.1.0",
+        "version": "2.1.1",
         "stripe_ready": keys["STRIPE_SECRET_KEY"],
         "supabase_ready": keys["SUPABASE_URL"] and keys["SUPABASE_SERVICE_KEY"],
+        "mars_reason_wired": keys["MARS_REASON_URL"],
         "webhooks_ready": keys["ZAPIER_WEBHOOK_URL"] or keys["SLACK_WEBHOOK_URL"] or keys["ORCHESTRATOR_WEBHOOK_URL"],
         "keys": keys,
         "timestamp": datetime.utcnow().isoformat()
     }
 
-# ── STRIPE WEBHOOK ────────────────────────────────────────────────────────────
 @app.post("/webhook/stripe")
 async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
     payload = await request.body()
@@ -112,7 +114,6 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
     })
     return {"received": True, "event": event_type}
 
-# ── LEAD CAPTURE ──────────────────────────────────────────────────────────────
 @app.post("/lead/capture")
 async def capture_lead(request: Request):
     data = await request.json()
@@ -128,7 +129,6 @@ async def capture_lead(request: Request):
         "timestamp": datetime.utcnow().isoformat(),
         **data
     }
-    # Persist to Supabase when available
     sb = get_supabase()
     if sb:
         try:
@@ -145,7 +145,6 @@ async def capture_lead(request: Request):
     await fire_webhooks(payload)
     return {"status": "lead captured", "id": lead_id, "data": data}
 
-# ── REVENUE DASHBOARD ─────────────────────────────────────────────────────────
 @app.get("/revenue/dashboard")
 async def revenue_dashboard():
     revenue_data = await fetch_stripe_revenue()
@@ -183,7 +182,6 @@ async def fetch_stripe_revenue():
     except Exception as e:
         return {"available": 0, "pending": 0, "error": str(e)}
 
-# ── INVOICE CREATE ────────────────────────────────────────────────────────────
 @app.post("/invoice/create")
 async def create_invoice(request: Request):
     data = await request.json()
@@ -224,7 +222,6 @@ async def create_invoice(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ── PAYMENT LINK ──────────────────────────────────────────────────────────────
 @app.post("/payment/link")
 async def create_payment_link(request: Request):
     data = await request.json()
@@ -256,7 +253,6 @@ async def create_payment_link(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ── DEAL DESK ─────────────────────────────────────────────────────────────────
 @app.post("/deal/submit")
 async def submit_deal(request: Request):
     data = await request.json()
@@ -318,7 +314,6 @@ def list_deals():
         "timestamp": datetime.utcnow().isoformat()
     }
 
-# ── AGENT ORCHESTRATION ───────────────────────────────────────────────────────
 @app.post("/agent/run")
 async def run_agent(request: Request):
     data = await request.json()
@@ -326,19 +321,22 @@ async def run_agent(request: Request):
     agent = data.get("agent", "MARS")
     priority = data.get("priority", "normal")
     run_id = f"run_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    mars = mars_reason.reason(task, route=data.get("route", "auto")) if task else {"queued": True}
     await fire_webhooks({
         "event": "agent_task",
         "agent": agent,
         "task": task,
         "priority": priority,
-        "run_id": run_id
+        "run_id": run_id,
+        "mars_route": (mars.get("route") or {}).get("path"),
     })
     return {
         "agent": agent,
-        "status": "queued",
+        "status": "reasoned" if mars.get("success") else "queued",
         "run_id": run_id,
         "task": task,
         "priority": priority,
+        "mars": mars,
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -351,7 +349,6 @@ def agent_status(run_id: str):
         "timestamp": datetime.utcnow().isoformat()
     }
 
-# ── OUTREACH / NOTIFICATION ───────────────────────────────────────────────────
 @app.post("/notify")
 async def send_notification(request: Request):
     data = await request.json()
@@ -366,7 +363,6 @@ async def send_notification(request: Request):
     await fire_webhooks(payload)
     return {"status": "notification queued", "payload": payload}
 
-# ── UTILITY — multi-webhook fan-out (Zapier + Slack + Orchestrator) ───────────
 async def fire_webhooks(payload: dict):
     urls = [u for u in (ZAPIER_WEBHOOK_URL, SLACK_WEBHOOK_URL, ORCHESTRATOR_WEBHOOK_URL) if u]
     if not urls:
@@ -374,7 +370,6 @@ async def fire_webhooks(payload: dict):
     async with httpx.AsyncClient() as client:
         for url in urls:
             try:
-                # Slack expects a slightly different shape; send raw for Zapier/Orchestrator
                 body = payload
                 if "hooks.slack.com" in url:
                     text = f"*{payload.get('event', 'mars')}*\n```{str(payload)[:800]}```"
@@ -382,3 +377,5 @@ async def fire_webhooks(payload: dict):
                 await client.post(url, json=body, timeout=5)
             except Exception:
                 pass
+
+mount_mars(app)
