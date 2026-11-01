@@ -1,0 +1,42 @@
+name: RHNS application verification
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Policy and middleware tests
+        run: python -m unittest -v test_rhns_policy test_rhns_middleware
+      - name: Real guarded application HTTP checks
+        run: |
+          python - <<'PY'
+          import os
+          from fastapi.testclient import TestClient
+          from guarded_main import app
+          token = 'ci-only-not-a-production-secret-' + 'x' * 40
+          os.environ['MARS_OPERATOR_TOKEN'] = token
+          with TestClient(app) as client:
+              assert client.get('/health').status_code == 200
+              for path in ['/deal/list', '/revenue/dashboard', '/docs', '/openapi.json']:
+                  response = client.get(path)
+                  assert response.status_code == 401, (path, response.status_code)
+              for path in ['/invoice/create', '/payment/link', '/agent/run', '/notify']:
+                  response = client.post(path, json={})
+                  assert response.status_code == 401, (path, response.status_code)
+              response = client.get('/openapi.json', headers={'Authorization': 'Bearer ' + token})
+              assert response.status_code == 200
+              os.environ.pop('MARS_OPERATOR_TOKEN')
+              assert client.get('/deal/list').status_code == 503
+          print('Guarded application import and 11 HTTP assertions passed; no provider actions requested')
+          PY
