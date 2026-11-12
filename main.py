@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import stripe, os, httpx
@@ -30,6 +31,35 @@ app = FastAPI(
 )
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.on_event("startup")
+async def start_optional_mesh_heartbeat():
+    """Signed health metadata only; no invoice/agent/Stripe events on mesh."""
+    if os.getenv("GARCAR_MESH_PUBLISH_ENABLED", "").lower() != "true":
+        return
+
+    async def run_mesh_reporting():
+        from mesh_heartbeat import send_heartbeat
+        while True:
+            try:
+                await asyncio.to_thread(send_heartbeat, "degraded")
+            except Exception:
+                pass
+            await asyncio.sleep(300)
+
+    app.state.mesh_reporting_task = asyncio.create_task(run_mesh_reporting())
+
+
+@app.on_event("shutdown")
+async def stop_optional_mesh_heartbeat():
+    task = getattr(app.state, "mesh_reporting_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 stripe.api_key = STRIPE_SECRET_KEY
 
