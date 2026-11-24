@@ -79,3 +79,24 @@ The GitHub workflow validates code only; it **does not deploy to Railway or send
 
 ---
 *Garcar Enterprise — MARS (Multi-Agent Revenue System) · canonical keys enabled*
+
+
+### Lead and deal persistence boundary
+
+The protected `POST /lead/capture` and `POST /deal/submit` routes now refuse
+to acknowledge an intake unless an authorized Supabase client is configured
+and its insert response contains the exact generated row ID. Missing,
+failed, or ambiguous persistence returns **HTTP 503**; invalid input or
+missing explicit lead consent returns **HTTP 422**. An HTTP 200 response
+confirms a represented row insert only, not customer outreach, qualified
+revenue, or complete disaster recovery.
+
+These two routes no longer broadcast submitted customer fields to
+Slack, Zapier, or the orchestrator merely because intake occurred. Buyer data
+must not be copied to external systems without reviewed scope and consent.
+Source code does not establish live Supabase ownership or database health.
+
+Before production use, verify the actual project schema, tenant access,
+idempotency/duplicate prevention, private-data retention, consent records,
+backup/restore, and customer-approved delivery integrations. An uncertain
+database acknowledgement may need manual reconciliation before retrying.
