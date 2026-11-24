@@ -1,49 +1,38 @@
-name: Garcar Deploy - MARS API
+name: MARS API Validation (deployment gated)
 
 on:
+  pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 13 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  deploy:
+  validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Test import
-        run: python -c "import main; print('MARS API imports OK')"
-
-      - name: Deploy to Railway
-        if: env.RAILWAY_TOKEN != ''
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify both ASGI entrypoints enforce operator policy
+        run: python -m unittest discover -s . -p 'test_*.py' -v
+      - name: Import protected entrypoints
         run: |
-          npm install -g @railway/cli
-          railway up --detach
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-
-      - name: Skip deploy (no token)
-        if: env.RAILWAY_TOKEN == ''
-        run: echo "RAILWAY_TOKEN not set - skipping deploy. Add secret to enable auto-deploy."
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-
-      - name: Notify deploy
-        if: always()
+          python - <<'PY'
+          from main import app as primary
+          from guarded_main import app as legacy
+          from rhns_middleware import OperatorGuard
+          assert primary is legacy
+          assert isinstance(primary, OperatorGuard)
+          print("Both ASGI entrypoints are guarded; no deployment attempted.")
+          PY
+      - name: Record non-deployment boundary
         run: |
-          echo "MARS API pipeline complete"
-          curl -s -X POST https://api.resend.com/emails \
-            -H "Authorization: Bearer ${{ secrets.RESEND_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"from":"deploy@garcar.io","to":"carrolgarrett55@gmail.com","subject":"MARS API Pipeline Complete","html":"<h2>MARS API Deploy Pipeline Finished</h2>"}' || true
+          echo "Code checks only. Production deployment remains separately authorized." >> "$GITHUB_STEP_SUMMARY"
+          echo "No Railway deploy, Resend notification, Stripe request, or live task dispatch." >> "$GITHUB_STEP_SUMMARY"

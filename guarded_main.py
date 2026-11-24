@@ -1,5 +1,5 @@
-"""Production ASGI entrypoint with mandatory operator authorization."""
-from main import app as application
-from rhns_middleware import OperatorGuard
+"""Compatibility ASGI entrypoint: the canonical `main:app` is already guarded.
 
-app = OperatorGuard(application)
+Do not layer a second guard or accidentally serve the raw FastAPI application.
+"""
+from main import app

@@ -378,4 +378,9 @@ async def fire_webhooks(payload: dict):
             except Exception:
                 pass
 
+# Keep all route mounting on the underlying FastAPI app. The public ASGI export
+# MUST enforce the same operator policy whether hosting uses main:app or
+# guarded_main:app. Never expose the unguarded app as a deployment entrypoint.
 mount_mars(app)
+from rhns_middleware import OperatorGuard
+app = OperatorGuard(app)
