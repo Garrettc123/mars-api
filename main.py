@@ -1,7 +1,8 @@
 from fastapi import FastAPI, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import stripe, os, httpx
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4
 from typing import Optional, Any
 
 import mars_reason
@@ -34,6 +35,15 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 stripe.api_key = STRIPE_SECRET_KEY
 
 _supabase = None
+
+
+def _record_confirmed(result, expected_id: str) -> bool:
+    """Require authoritative insert representation; unknown outcomes do not pass."""
+    rows = getattr(result, "data", None)
+    return isinstance(rows, list) and any(
+        isinstance(row, dict) and row.get("id") == expected_id for row in rows
+    )
+
 
 def get_supabase():
     global _supabase
@@ -117,33 +127,35 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
 @app.post("/lead/capture")
 async def capture_lead(request: Request):
     data = await request.json()
-    required = ["name", "email"]
-    for field in required:
-        if field not in data:
-            raise HTTPException(status_code=422, detail=f"Missing field: {field}")
-    lead_id = f"lead_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    payload = {
-        "event": "new_lead",
-        "id": lead_id,
-        "source": data.get("source", "mars-api"),
-        "timestamp": datetime.utcnow().isoformat(),
-        **data
-    }
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Lead must be a JSON object")
+    name, email = data.get("name"), data.get("email")
+    if not isinstance(name, str) or not name.strip() or not isinstance(email, str) or "@" not in email:
+        raise HTTPException(status_code=422, detail="Valid name and email required")
+    if data.get("consentGiven") is not True:
+        raise HTTPException(status_code=422, detail="Explicit lead intake consent required")
     sb = get_supabase()
-    if sb:
-        try:
-            sb.table("leads").insert({
-                "id": lead_id,
-                "name": data.get("name"),
-                "email": data.get("email"),
-                "source": payload["source"],
-                "payload": data,
-                "created_at": payload["timestamp"]
-            }).execute()
-        except Exception:
-            pass
-    await fire_webhooks(payload)
-    return {"status": "lead captured", "id": lead_id, "data": data}
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Lead persistence not configured")
+    lead_id = "lead_" + uuid4().hex
+    created = datetime.now(timezone.utc).isoformat()
+    row = {
+        "id": lead_id,
+        "name": name.strip(),
+        "email": email.strip(),
+        "source": data.get("source") if isinstance(data.get("source"), str) else "mars-api",
+        "payload": data,
+        "created_at": created,
+    }
+    try:
+        result = sb.table("leads").insert(row).execute()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Lead storage outcome unverified") from None
+    if not _record_confirmed(result, lead_id):
+        raise HTTPException(status_code=503, detail="Lead storage outcome unverified")
+    # No PII is fanned out to Slack/Zapier from an unapproved intake event.
+    return {"status": "stored", "id": lead_id, "outbound_sent": False}
+
 
 @app.get("/revenue/dashboard")
 async def revenue_dashboard():
@@ -256,37 +268,36 @@ async def create_payment_link(request: Request):
 @app.post("/deal/submit")
 async def submit_deal(request: Request):
     data = await request.json()
-    deal_id = f"deal_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    deal = {
-        "event": "new_deal",
-        "deal_id": deal_id,
-        "company": data.get("company", ""),
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Deal must be a JSON object")
+    company, email = data.get("company"), data.get("email")
+    if not isinstance(company, str) or not company.strip() or not isinstance(email, str) or "@" not in email:
+        raise HTTPException(status_code=422, detail="Valid company and email required")
+    sb = get_supabase()
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Deal persistence not configured")
+    deal_id = "deal_" + uuid4().hex
+    created = datetime.now(timezone.utc).isoformat()
+    row = {
+        "id": deal_id,
+        "company": company.strip(),
         "contact": data.get("contact", ""),
-        "email": data.get("email", ""),
+        "email": email.strip(),
         "value": data.get("value", 0),
         "service": data.get("service", ""),
         "notes": data.get("notes", ""),
         "status": "submitted",
-        "timestamp": datetime.utcnow().isoformat()
+        "created_at": created,
     }
-    sb = get_supabase()
-    if sb:
-        try:
-            sb.table("deals").insert({
-                "id": deal_id,
-                "company": deal["company"],
-                "contact": deal["contact"],
-                "email": deal["email"],
-                "value": deal["value"],
-                "service": deal["service"],
-                "notes": deal["notes"],
-                "status": deal["status"],
-                "created_at": deal["timestamp"]
-            }).execute()
-        except Exception:
-            pass
-    await fire_webhooks(deal)
-    return {"status": "deal submitted", "deal_id": deal_id, "deal": deal}
+    try:
+        result = sb.table("deals").insert(row).execute()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Deal storage outcome unverified") from None
+    if not _record_confirmed(result, deal_id):
+        raise HTTPException(status_code=503, detail="Deal storage outcome unverified")
+    # Deal creation does not imply consent for downstream notification or outreach.
+    return {"status": "stored", "deal_id": deal_id, "outbound_sent": False}
+
 
 @app.get("/deal/list")
 def list_deals():
