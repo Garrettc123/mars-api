@@ -17,7 +17,7 @@ _ALLOWED = {
     "action-guard": frozenset({"analyze", "verify"}),
 }
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
-_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_JOB_ID = re.compile(r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{64})$")
 
 
 def _configuration() -> tuple[str, str, str]:
@@ -90,7 +90,7 @@ async def submit_bounded_task(data: dict) -> dict:
 
 
 async def get_bounded_task(job_id: str) -> dict:
-    if not _UUID.fullmatch(job_id):
+    if not _JOB_ID.fullmatch(job_id):
         raise HTTPException(status_code=422, detail="Invalid RHNS job ID")
     result = await _remote("GET", "/jobs/" + job_id)
     if result.get("job_id") != job_id or not isinstance(result.get("state"), str):
