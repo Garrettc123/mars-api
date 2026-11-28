@@ -41,7 +41,7 @@ def _task_fields(data: dict) -> dict:
     key = data.get("idempotency_key")
     if set(data) != {"agent", "capability", "payload", "idempotency_key"}:
         raise HTTPException(status_code=422, detail="Only explicit RHNS task fields are permitted")
-    if agent not in _ALLOWED or capability not in _ALLOWED[agent]:
+    if not isinstance(agent, str) or not isinstance(capability, str) or agent not in _ALLOWED or capability not in _ALLOWED[agent]:
         raise HTTPException(status_code=403, detail="RHNS capability is not allowed")
     if not isinstance(payload, dict) or not isinstance(key, str) or not _IDENTIFIER.fullmatch(key) or len(key) < 16:
         raise HTTPException(status_code=422, detail="Bounded payload and idempotency key required")
