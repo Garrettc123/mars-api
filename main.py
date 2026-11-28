@@ -327,38 +327,23 @@ def list_deals():
 
 @app.post("/agent/run")
 async def run_agent(request: Request):
-    data = await request.json()
-    task = data.get("task", "")
-    agent = data.get("agent", "MARS")
-    priority = data.get("priority", "normal")
-    run_id = f"run_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-    mars = mars_reason.reason(task, route=data.get("route", "auto")) if task else {"queued": True}
-    await fire_webhooks({
-        "event": "agent_task",
-        "agent": agent,
-        "task": task,
-        "priority": priority,
-        "run_id": run_id,
-        "mars_route": (mars.get("route") or {}).get("path"),
-    })
-    return {
-        "agent": agent,
-        "status": "reasoned" if mars.get("success") else "queued",
-        "run_id": run_id,
-        "task": task,
-        "priority": priority,
-        "mars": mars,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    """Queue only authenticated, allowlisted L0/L1 work in the durable RHNS host."""
+    from rhns_runtime_client import submit_bounded_task
+    try:
+        data = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="JSON object required")
+    return await submit_bounded_task(data)
+
 
 @app.get("/agent/status/{run_id}")
-def agent_status(run_id: str):
-    return {
-        "run_id": run_id,
-        "status": "running",
-        "message": "Connect task queue / Linear for live status",
-        "timestamp": datetime.utcnow().isoformat()
-    }
+async def agent_status(run_id: str):
+    """Read an existing job receipt; never fabricate queued/running states."""
+    from rhns_runtime_client import get_bounded_task
+    return await get_bounded_task(run_id)
+
 
 @app.post("/notify")
 async def send_notification(request: Request):
